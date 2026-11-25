@@ -1,0 +1,298 @@
+{
+  "id": "facturasPorCorreo01",
+  "name": "Facturas por correo",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Facturas por correo\nLee el buzon, se queda solo con los adjuntos PDF y los envia a la API (`POST /api/ingest`).\nLa API extrae los datos, guarda la factura como *pendiente de revisar* y devuelve `duplicate: true` si ya tenia ese PDF (mismo SHA-256).\n\nVariables de entorno necesarias en n8n: `API_URL`, `INGEST_TOKEN`.",
+        "height": 200,
+        "width": 420,
+        "color": 4
+      },
+      "id": "n-nota-1",
+      "name": "Nota: que hace",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -80,
+        -40
+      ]
+    },
+    {
+      "parameters": {
+        "postProcessAction": "read",
+        "format": "resolved",
+        "downloadAttachments": true,
+        "options": {
+          "customEmailConfig": "[\"UNSEEN\"]"
+        }
+      },
+      "id": "n-correo",
+      "name": "Correo entrante",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2,
+      "position": [
+        0,
+        200
+      ],
+      "credentials": {
+        "imap": {
+          "id": "CONFIGURAR",
+          "name": "Buzon de facturas (IMAP)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Cada adjunto del correo llega como binary attachment_0, attachment_1...\n// Se emite un item por cada PDF y se descarta el resto (imagenes de firma, docx, etc.).\nconst salida = [];\nconst descartados = [];\n\nfor (const item of $input.all()) {\n  const binarios = item.binary ?? {};\n  const cabecera = item.json ?? {};\n  for (const [clave, fichero] of Object.entries(binarios)) {\n    const nombre = fichero.fileName ?? clave;\n    const esPdf = fichero.mimeType === 'application/pdf' || /\\.pdf$/i.test(nombre);\n    if (!esPdf) {\n      descartados.push(nombre);\n      continue;\n    }\n    salida.push({\n      json: {\n        messageId: cabecera.metadata?.['message-id'] ?? cabecera.messageId ?? '',\n        from: cabecera.from ?? '',\n        subject: cabecera.subject ?? '',\n        receivedAt: cabecera.date ?? new Date().toISOString(),\n        fileName: nombre,\n      },\n      binary: { data: fichero },\n    });\n  }\n}\n\nif (descartados.length) {\n  console.log('Adjuntos descartados por no ser PDF: ' + descartados.join(', '));\n}\nreturn salida;\n"
+      },
+      "id": "n-separar",
+      "name": "Separar adjuntos PDF",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.API_URL }}/api/ingest",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-ingest-token",
+              "value": "={{ $env.INGEST_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            },
+            {
+              "name": "messageId",
+              "value": "={{ $json.messageId }}"
+            },
+            {
+              "name": "from",
+              "value": "={{ $json.from }}"
+            },
+            {
+              "name": "subject",
+              "value": "={{ $json.subject }}"
+            },
+            {
+              "name": "receivedAt",
+              "value": "={{ $json.receivedAt }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "n-enviar",
+      "name": "Enviar a la API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        200
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.duplicate }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "n-duplicada",
+      "name": "Duplicada?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        780,
+        100
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "n-ya",
+      "name": "Ya existia",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        20
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "n-nueva",
+      "name": "Factura nueva",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "n8n@ejemplo.test",
+        "toEmail": "admin@ejemplo.test",
+        "subject": "=Fallo al ingerir factura: {{ $('Separar adjuntos PDF').item.json.fileName }}",
+        "emailFormat": "text",
+        "text": "=No se ha podido enviar la factura a la API tras 3 intentos.\n\nRemitente: {{ $('Separar adjuntos PDF').item.json.from }}\nAsunto: {{ $('Separar adjuntos PDF').item.json.subject }}\nError: {{ $json.error?.message ?? JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "n-aviso",
+      "name": "Avisar del error",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        780,
+        340
+      ],
+      "disabled": true,
+      "credentials": {
+        "smtp": {
+          "id": "CONFIGURAR",
+          "name": "SMTP avisos"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Errores\nSi la API no responde, el nodo reintenta 3 veces (5 s entre intentos). Si sigue fallando, el item sale por la rama de error. El correo ya esta marcado como leido, asi que conviene activar el aviso (nodo deshabilitado) o revisar las ejecuciones fallidas.\n\nUn 422 (PDF que no se puede leer) tambien llega por esta rama.",
+        "height": 190,
+        "width": 420,
+        "color": 3
+      },
+      "id": "n-nota-2",
+      "name": "Nota: errores",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        700,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Configuracion\n1. Crear la credencial IMAP y asignarla a *Correo entrante*.\n2. Definir `API_URL` e `INGEST_TOKEN` (ver `.env.example`).\n3. Activar el flujo.\n\nPara probar sin correo, ejecuta `npm run muestras:enviar` en el repositorio: hace la misma peticion.",
+        "height": 190,
+        "width": 420,
+        "color": 5
+      },
+      "id": "n-nota-3",
+      "name": "Nota: configuracion",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        420
+      ]
+    }
+  ],
+  "connections": {
+    "Correo entrante": {
+      "main": [
+        [
+          {
+            "node": "Separar adjuntos PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Separar adjuntos PDF": {
+      "main": [
+        [
+          {
+            "node": "Enviar a la API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar a la API": {
+      "main": [
+        [
+          {
+            "node": "Duplicada?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Avisar del error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Duplicada?": {
+      "main": [
+        [
+          {
+            "node": "Ya existia",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Factura nueva",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
