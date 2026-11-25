@@ -1,0 +1,23 @@
+{
+  "name": "lector-facturas",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lectura de facturas PDF recibidas por correo, revisión manual y consulta con asistente",
+  "workspaces": [
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,green \"npm run dev -w apps/api\" \"npm run dev -w apps/web\"",
+    "build": "npm run build -w apps/api && npm run build -w apps/web",
+    "start": "npm run start -w apps/api",
+    "test": "npm test -w apps/api",
+    "typecheck": "npm run typecheck -w apps/api && npm run typecheck -w apps/web",
+    "muestras:enviar": "node scripts/enviar-muestras.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.5"
+  }
+}

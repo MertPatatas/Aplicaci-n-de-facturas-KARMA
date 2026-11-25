@@ -1,0 +1,37 @@
+# Levanta la aplicacion (API + web) y n8n.
+# Uso: copiar .env.example a .env, cambiar los tokens y ejecutar `docker compose up -d`.
+services:
+  api:
+    build: .
+    ports:
+      - "3001:3001"
+    environment:
+      INGEST_TOKEN: ${INGEST_TOKEN:-cambia-este-token}
+      TZ_NEGOCIO: ${TZ_NEGOCIO:-Europe/Madrid}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5-5}
+    volumes:
+      - api-data:/data
+    restart: unless-stopped
+
+  n8n:
+    image: n8nio/n8n:latest
+    ports:
+      - "5678:5678"
+    environment:
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-cambia-esta-clave}
+      GENERIC_TIMEZONE: ${TZ_NEGOCIO:-Europe/Madrid}
+      # Los nodos del flujo leen API_URL e INGEST_TOKEN con $env
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      API_URL: ${API_URL_DESDE_N8N:-http://api:3001}
+      INGEST_TOKEN: ${INGEST_TOKEN:-cambia-este-token}
+    volumes:
+      - n8n-data:/home/node/.n8n
+      - ./n8n:/flujos:ro
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  api-data:
+  n8n-data:
